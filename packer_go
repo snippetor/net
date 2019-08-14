@@ -1,0 +1,96 @@
+// Copyright 2017 bingo Author. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package net
+
+import (
+	"bytes"
+	"encoding/binary"
+	"math"
+)
+
+// 消息包
+// |--- message length ---|--- message id ---|--- message payload ---|
+// |---     4 bytes    ---|---   4 bytes  ---|---      n bytes    ---|
+type messagePacker struct {
+}
+
+func (p *messagePacker) Pack(msg *Message) ([]byte, error) {
+	if msg.Id < 0 {
+		return nil, InvalidMessageError{"wrong message id, max more than 0"}
+	}
+	var pk []byte
+	// 写入长度
+	buf := bytes.NewBuffer([]byte{})
+	if msg.Payload == nil {
+		if err := binary.Write(buf, binary.BigEndian, 4); err != nil {
+			return nil, err
+		}
+	} else {
+		bodyLen := len(msg.Payload)
+		if bodyLen > math.MaxInt32 {
+			return nil, InvalidMessageLengthError{bodyLen}
+		}
+		if err := binary.Write(buf, binary.BigEndian, int32(bodyLen)+4); err != nil {
+			return nil, err
+		}
+	}
+	pk = append(pk, buf.Bytes()...)
+	// 写入id
+	buf.Reset()
+	if err := binary.Write(buf, binary.BigEndian, msg.Id); err != nil {
+		return nil, err
+	}
+	pk = append(pk, buf.Bytes()...)
+	// 消息体
+	if msg.Payload != nil && len(msg.Payload) > 0 {
+		pk = append(pk, msg.Payload...)
+	}
+	return pk, nil
+}
+
+func (p *messagePacker) Unpack(buffer []byte) (*Message, []byte, error) {
+	if buffer == nil || len(buffer) == 0 {
+		return nil, buffer, InvalidMessageError{"unpack empty or nil buffer"}
+	}
+	// 前4个字节为包长度
+	var length int
+	buf := bytes.NewBuffer(buffer[:4])
+	err := binary.Read(buf, binary.BigEndian, &length)
+	if err != nil {
+		return nil, buffer, err
+	}
+	if length < 0 {
+		return nil, buffer, InvalidMessageLengthError{length}
+	}
+	if len(buffer)-4 >= length {
+		var id int32
+		// 再4个字节为消息ID
+		buf.Reset()
+		buf.Write(buffer[4:8])
+		err = binary.Read(buf, binary.BigEndian, &id)
+		if err != nil {
+			return nil, buffer, err
+		}
+		// 剩余为包体
+		ret := buffer[8 : 4+length]
+		if int(4+length) < len(buffer) {
+			buffer = buffer[4+length:]
+		} else {
+			buffer = make([]byte, 0)
+		}
+		return &Message{id, ret}, buffer, nil
+	}
+	return nil, buffer, InvalidMessageError{"incomplete message"}
+}
